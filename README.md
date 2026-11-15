@@ -36,11 +36,11 @@ The game resets your visor to raised when you load a save. After loading, press 
 
 Source: <https://github.com/Knitby/dynamic-visor-dialogue-system>
 
-DVDS is built against libKCD2 (see its repository for build steps): <https://github.com/JerryYOJ/libKCD2>
+DVDs is built against libKCD2 (see its repository for build steps): <https://github.com/JerryYOJ/libKCD2>
 
 ## License
 
-DVDS is free software, released under the GNU General Public License version 3. See the [LICENSE](LICENSE) file.
+DVDs is free software, released under the GNU General Public License version 3. See the [LICENSE](LICENSE) file.
 It comes with no warranty. It links against libKCD2 (GPLv3) and uses MinHook. Their notices are in [THIRD-PARTY-NOTICES.txt](THIRD-PARTY-NOTICES.txt).
 
 ## Credits
