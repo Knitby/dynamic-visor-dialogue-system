@@ -11,7 +11,7 @@
 // Keeps the player's helmet visor lowered during dialogue when it was lowered before.
 // KCSE plugin for Kingdom Come: Deliverance 2, WHGame.dll 1.5.6 (game version 0x01050600).
 //
-// How it works (all RVAs found with Ghidra, Ghidra address - 0x180000000 = RVA):
+// How it works (all RVAs found with Ghidra, Ghidra address - 0x180000000 = RVA; per build, see kBuilds):
 //  * The vanilla visor toggle (RVA 0x2AA79CC) flags the helmet items with 0x80000 (RVA 0x46643C).
 //    We remember which items those are while the player's toggle runs.
 //  * A dialogue re-adds the player's gear to temporary clothing managers (AddItem, RVA 0x9DDB58) and
@@ -44,11 +44,27 @@
 namespace {
 
 constexpr uint32_t    kGameVersion   = 0x01050600;  // 1.5.6
-constexpr std::size_t kToggleRva     = 0x2AA79CC;   // player visor toggle (Z)
-constexpr std::size_t kSetFlagRva    = 0x46643C;    // SetElementFlag(item, flag, value)
-constexpr std::size_t kAddItemRva    = 0x9DDB58;    // clothing manager AddItem(mgr, item)
-constexpr std::size_t kPoseExecRva   = 0x111201C;   // C_VisorPoseModifier::Execute
-constexpr std::size_t kIsTypeRva     = 0x469590;    // IsType(item, type), 0x10 = helmet
+
+// Addresses (RVAs) of the five functions we need, per supported build of WHGame.dll. The game version
+// number is the same (1.5.6) for every storefront, but each storefront has its own build with its own
+// addresses, so the build is recognised by the PE header (timestamp + image size) of the loaded WHGame.dll.
+// Any other build gets no hooks at all.
+struct BuildInfo {
+    const char*   name;
+    std::uint32_t timestamp;   // IMAGE_FILE_HEADER.TimeDateStamp
+    std::uint32_t imageSize;   // IMAGE_OPTIONAL_HEADER.SizeOfImage
+    std::size_t   toggle;      // player visor toggle (Z)
+    std::size_t   setFlag;     // SetElementFlag(item, flag, value)
+    std::size_t   addItem;     // clothing manager AddItem(mgr, item)
+    std::size_t   poseExec;    // C_VisorPoseModifier::Execute
+    std::size_t   isType;      // IsType(item, type), 0x10 = helmet
+};
+
+constexpr BuildInfo kBuilds[] = {
+    { "Steam", 0x6A350E20, 0x05B2D000, 0x2AA79CC, 0x46643C, 0x9DDB58, 0x111201C, 0x469590 },
+    { "Epic",  0x6A34F917, 0x05B18000, 0x2A9CAB4, 0x465F1C, 0x4F3320, 0x110FA9C, 0x469070 },
+};
+const BuildInfo* g_build = nullptr;
 constexpr std::uint32_t kVisorFlag   = 0x80000;
 constexpr long long   kArmWindowMs   = 3000;        // armed state expires after this
 constexpr long long   kIdleMs        = 1500;        // a modifier not run for this long is gone / new
@@ -109,7 +125,7 @@ bool IsHelmetType(void* item)
 {
     if (!item) return false;
     __try {
-        auto fn = reinterpret_cast<std::uint8_t (*)(void*, unsigned)>(REL::Offset(kIsTypeRva).address());
+        auto fn = reinterpret_cast<std::uint8_t (*)(void*, unsigned)>(REL::Offset(g_build->isType).address());
         return fn(item, 0x10) != 0;
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         return false;
@@ -275,6 +291,27 @@ bool Hook(const char* name, std::size_t rva, void* detour, Fn* orig)
     return true;
 }
 
+// Reads the PE header of the loaded WHGame.dll and returns the matching entry of kBuilds, or nullptr.
+const BuildInfo* DetectBuild(std::uint32_t* timestamp, std::uint32_t* imageSize)
+{
+    *timestamp = 0;
+    *imageSize = 0;
+    __try {
+        const auto* base = reinterpret_cast<const std::uint8_t*>(REL::Module::get().base());
+        const std::uint32_t nt = *reinterpret_cast<const std::uint32_t*>(base + 0x3C);
+        if (*reinterpret_cast<const std::uint16_t*>(base) != 0x5A4D) return nullptr;        // "MZ"
+        if (*reinterpret_cast<const std::uint32_t*>(base + nt) != 0x00004550) return nullptr; // "PE\0\0"
+        *timestamp = *reinterpret_cast<const std::uint32_t*>(base + nt + 8);
+        *imageSize = *reinterpret_cast<const std::uint32_t*>(base + nt + 0x50);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return nullptr;
+    }
+    for (const auto& b : kBuilds) {
+        if (b.timestamp == *timestamp && b.imageSize == *imageSize) return &b;
+    }
+    return nullptr;
+}
+
 bool InstallHooks()
 {
     if (MH_Initialize() != MH_OK) {
@@ -282,10 +319,10 @@ bool InstallHooks()
         return false;
     }
     const bool ok =
-        Hook("Toggle",   kToggleRva,     reinterpret_cast<void*>(&DetourToggle),  &g_origToggle) &&
-        Hook("SetFlag",  kSetFlagRva,    reinterpret_cast<void*>(&DetourSetFlag), &g_origSetFlag) &&
-        Hook("AddItem",  kAddItemRva,    reinterpret_cast<void*>(&DetourAdd),     &g_origAdd) &&
-        Hook("PoseExec", kPoseExecRva,   reinterpret_cast<void*>(&DetourExec),    &g_origExec);
+        Hook("Toggle",   g_build->toggle,     reinterpret_cast<void*>(&DetourToggle),  &g_origToggle) &&
+        Hook("SetFlag",  g_build->setFlag,    reinterpret_cast<void*>(&DetourSetFlag), &g_origSetFlag) &&
+        Hook("AddItem",  g_build->addItem,    reinterpret_cast<void*>(&DetourAdd),     &g_origAdd) &&
+        Hook("PoseExec", g_build->poseExec,   reinterpret_cast<void*>(&DetourExec),    &g_origExec);
     DVDS_LOG(ok ? "[DVDs] all hooks installed" : "[DVDs] not all hooks installed, mod inactive");
     return ok;
 }
@@ -306,7 +343,7 @@ void OnMessage(KCSE::Message* msg)
 
 }  // namespace
 
-KCSE_PLUGIN_INFO("DVDs", "Knitby", 15);
+KCSE_PLUGIN_INFO("DVDs", "Knitby", 16);
 
 KCSE_PLUGIN_LOAD(kcse)
 {
@@ -315,6 +352,14 @@ KCSE_PLUGIN_LOAD(kcse)
                static_cast<unsigned>(kcse->GetGameVersion()));
         return true;
     }
+    std::uint32_t timestamp = 0, imageSize = 0;
+    g_build = DetectBuild(&timestamp, &imageSize);
+    if (!g_build) {
+        DVDS_LOG("[DVDs] unsupported game build (WHGame.dll timestamp=0x%08X size=0x%08X), mod inactive",
+                 timestamp, imageSize);
+        return true;
+    }
+    DVDS_LOG("[DVDs] game build recognised: %s", g_build->name);
     kcse->GetMessagingInterface()->RegisterListener(&OnMessage);
     return InstallHooks();
 }
